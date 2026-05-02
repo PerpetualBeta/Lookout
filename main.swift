@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventMonitor: Any?
     private let core = LookoutCore()
     private let updateChecker = JorvikUpdateChecker(repoName: "Lookout")
+    private var isPulsing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installEditMenu()
@@ -79,20 +80,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let symbol: String
         let tint: NSColor?
+        let shouldPulse: Bool
         switch core.state {
         case .unconfigured:
             symbol = "binoculars"
             tint = nil
+            shouldPulse = false
         case .error:
             symbol = "binoculars.fill"
             tint = .systemOrange
+            shouldPulse = false
         default:
             if core.unreadCount > 0 {
                 symbol = "binoculars.fill"
                 tint = .systemRed
+                shouldPulse = true
             } else {
                 symbol = "binoculars"
                 tint = nil
+                shouldPulse = false
             }
         }
 
@@ -101,15 +107,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             tint: tint,
             accessibilityDescription: "Lookout"
         )
+        button.title = ""
+        button.imagePosition = .imageOnly
 
-        let count = core.unreadCount
-        if count > 0 {
-            button.title = " \(count)"
-            button.imagePosition = .imageLeft
+        if shouldPulse {
+            startPulse(color: tint ?? .systemRed)
         } else {
-            button.title = ""
-            button.imagePosition = .imageOnly
+            stopPulse()
         }
+    }
+
+    // MARK: - Pulse / glow animation
+    // Same shape as CalendarUpcoming's startPulse/stopPulse — opacity fade
+    // 1.0 → 0.35 plus a coloured shadow halo, 1.2s easeInEaseOut, infinite,
+    // autoreversing. Whole status-bar image (pill + glyph) fades together,
+    // which is the accepted trade-off for the composed-NSImage pill design.
+
+    private func startPulse(color: NSColor) {
+        if isPulsing { stopPulse() }
+        guard let layer = statusItem.button?.layer else { return }
+        isPulsing = true
+
+        layer.shadowColor = color.cgColor
+        layer.shadowOpacity = 0.0
+        layer.shadowRadius = 8.0
+        layer.shadowOffset = .zero
+
+        let opAnim = CABasicAnimation(keyPath: "opacity")
+        opAnim.fromValue = 1.0; opAnim.toValue = 0.35
+        opAnim.duration = 1.2; opAnim.autoreverses = true
+        opAnim.repeatCount = .infinity
+        opAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(opAnim, forKey: "lookoutPulse")
+
+        let glowAnim = CABasicAnimation(keyPath: "shadowOpacity")
+        glowAnim.fromValue = 0.9; glowAnim.toValue = 0.1
+        glowAnim.duration = 1.2; glowAnim.autoreverses = true
+        glowAnim.repeatCount = .infinity
+        glowAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(glowAnim, forKey: "lookoutGlow")
+    }
+
+    private func stopPulse() {
+        guard isPulsing, let layer = statusItem.button?.layer else { return }
+        isPulsing = false
+        layer.removeAnimation(forKey: "lookoutPulse")
+        layer.removeAnimation(forKey: "lookoutGlow")
+        layer.opacity = 1.0
+        layer.shadowOpacity = 0.0
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {

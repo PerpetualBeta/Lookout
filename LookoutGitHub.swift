@@ -64,6 +64,13 @@ struct LookoutPollResult {
 actor LookoutGitHubClient {
     private let session: URLSession
     private var notificationsLastModified: String?
+    // Items parsed from the most recent 200 OK on /notifications.
+    // Returned verbatim on 304 Not Modified so that the user-visible
+    // "needs attention" state persists across polls until either the
+    // user resolves the thread (mark-as-read on github.com or via our
+    // markAllNotificationsRead) or GitHub emits a 200 with a different
+    // (possibly empty) list.
+    private var notificationsCache: [LookoutItem] = []
 
     init() {
         let config = URLSessionConfiguration.default
@@ -111,6 +118,12 @@ actor LookoutGitHubClient {
         request.httpBody = body
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
+        // GitHub-side state just changed; clear the cache and the
+        // If-Modified-Since marker so the next poll forces a 200 with a
+        // fresh list (rather than risking a 304 that revives the items
+        // the user just dismissed).
+        notificationsCache = []
+        notificationsLastModified = nil
     }
 
     private func applyAuth(_ request: inout URLRequest, token: String) {
@@ -182,7 +195,7 @@ actor LookoutGitHubClient {
         let newLastModified = http?.value(forHTTPHeaderField: "Last-Modified") ?? notificationsLastModified
 
         if http?.statusCode == 304 {
-            return NotificationsResult(items: [], pollInterval: pollInterval, lastModified: newLastModified)
+            return NotificationsResult(items: notificationsCache, pollInterval: pollInterval, lastModified: newLastModified)
         }
 
         let raw = try parseJSONArray(data)
@@ -211,6 +224,7 @@ actor LookoutGitHubClient {
             ))
         }
 
+        notificationsCache = items
         return NotificationsResult(items: items, pollInterval: pollInterval, lastModified: newLastModified)
     }
 
