@@ -1,0 +1,215 @@
+import Cocoa
+import SwiftUI
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: NSStatusItem!
+    private var popover: NSPopover!
+    private var eventMonitor: Any?
+    private let core = LookoutCore()
+    private let updateChecker = JorvikUpdateChecker(repoName: "Lookout")
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.register(defaults: ["menuBarPillEnabled": true])
+
+        installEditMenu()
+        setupStatusItem()
+        setupPopover()
+
+        core.onStateChange = { [weak self] in
+            self?.refreshIcon()
+        }
+        core.start()
+        refreshIcon()
+
+        if LookoutKeychain.loadToken() == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.showSetup()
+            }
+        }
+
+        updateChecker.checkOnSchedule()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        core.stop()
+        if let m = eventMonitor { NSEvent.removeMonitor(m) }
+    }
+
+    // LSUIElement apps get no default main menu, which means Cmd+X/C/V/A
+    // don't reach the first responder in any window we open. Install a
+    // hidden Edit menu so SecureField paste works in the setup sheet.
+    private func installEditMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Quit Lookout",
+                                   action: #selector(NSApplication.terminate(_:)),
+                                   keyEquivalent: "q"))
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo",       action: Selector(("undo:")),       keyEquivalent: "z"))
+        editMenu.addItem(NSMenuItem(title: "Redo",       action: Selector(("redo:")),       keyEquivalent: "Z"))
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut",        action: #selector(NSText.cut(_:)),         keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy",       action: #selector(NSText.copy(_:)),        keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste",      action: #selector(NSText.paste(_:)),       keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)),   keyEquivalent: "a"))
+        editItem.submenu = editMenu
+        main.addItem(editItem)
+
+        NSApp.mainMenu = main
+    }
+
+    // MARK: Status Item
+
+    private func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.autosaveName = "LookoutStatus"
+        if let button = statusItem.button {
+            button.target = self
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+    }
+
+    private func refreshIcon() {
+        guard let button = statusItem.button else { return }
+
+        let symbol: String
+        let tint: NSColor?
+        switch core.state {
+        case .unconfigured:
+            symbol = "binoculars"
+            tint = nil
+        case .error:
+            symbol = "binoculars.fill"
+            tint = .systemOrange
+        default:
+            if core.unreadCount > 0 {
+                symbol = "binoculars.fill"
+                tint = .systemRed
+            } else {
+                symbol = "binoculars"
+                tint = nil
+            }
+        }
+
+        button.image = JorvikMenuBarPill.icon(
+            symbolName: symbol,
+            tint: tint,
+            accessibilityDescription: "Lookout"
+        )
+
+        let count = core.unreadCount
+        if count > 0 {
+            button.title = " \(count)"
+            button.imagePosition = .imageLeft
+        } else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+        }
+    }
+
+    @objc private func statusItemClicked(_ sender: Any?) {
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            showRightClickMenu()
+        } else {
+            togglePopover()
+        }
+    }
+
+    // MARK: Popover
+
+    private func setupPopover() {
+        popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        let panel = LookoutPanel(
+            core: core,
+            onSetup: { [weak self] in self?.showSetup() },
+            onQuit:  { NSApp.terminate(nil) },
+            onAbout: { [weak self] in self?.openAbout() },
+            onSettings: { [weak self] in self?.openSettings() }
+        )
+        popover.contentViewController = NSHostingController(rootView: panel)
+    }
+
+    private func togglePopover() {
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        guard let button = statusItem.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        installClickAwayMonitor()
+    }
+
+    private func installClickAwayMonitor() {
+        if let m = eventMonitor { NSEvent.removeMonitor(m) }
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.popover.performClose(nil)
+        }
+    }
+
+    private func showRightClickMenu() {
+        let setupTitle = LookoutKeychain.loadToken() == nil ? "Set up GitHub Token\u{2026}" : "Re-enter GitHub Token\u{2026}"
+
+        let menu = JorvikMenuBuilder.buildMenu(
+            appName: "Lookout",
+            aboutAction: #selector(openAboutAction),
+            settingsAction: #selector(openSettingsAction),
+            target: self,
+            actions: [
+                JorvikMenuBuilder.ActionItem(title: "Refresh",     action: #selector(refreshNow),       target: self, keyEquivalent: "r"),
+                JorvikMenuBuilder.ActionItem(title: setupTitle,    action: #selector(showSetupAction),  target: self),
+            ]
+        )
+
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        DispatchQueue.main.async { [weak self] in self?.statusItem.menu = nil }
+    }
+
+    @objc private func refreshNow() { core.refreshNow() }
+    @objc private func showSetupAction() { showSetup() }
+    @objc private func openAboutAction() { openAbout() }
+    @objc private func openSettingsAction() { openSettings() }
+
+    private func showSetup() {
+        if popover.isShown { popover.performClose(nil) }
+        LookoutSetupWindow.show { [weak self] _ in
+            self?.core.tokenWasUpdated()
+        }
+    }
+
+    private func openAbout() {
+        if popover.isShown { popover.performClose(nil) }
+        JorvikAboutView.showWindow(
+            appName: "Lookout",
+            repoName: "Lookout",
+            productPage: "utilities/lookout"
+        )
+    }
+
+    private func openSettings() {
+        if popover.isShown { popover.performClose(nil) }
+        JorvikSettingsView.showWindow(
+            appName: "Lookout",
+            updateChecker: updateChecker
+        ) { [weak self] in
+            MenuBarPillSettings { self?.refreshIcon() }
+        }
+    }
+}
+
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
