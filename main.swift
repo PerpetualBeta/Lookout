@@ -9,8 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updateChecker = JorvikUpdateChecker(repoName: "Lookout")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        UserDefaults.standard.register(defaults: ["menuBarPillEnabled": true])
-
         installEditMenu()
         setupStatusItem()
         setupPopover()
