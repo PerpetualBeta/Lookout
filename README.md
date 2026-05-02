@@ -5,7 +5,7 @@ A native macOS menu-bar app that watches GitHub for things needing your attentio
 ## What it does
 
 - Sits silently in the menu bar as a binoculars icon
-- When something on GitHub needs you, the icon switches to its filled variant with a count badge
+- When something on GitHub needs you, the icon switches to a red-tinted filled variant and slowly pulses until you've resolved the items
 - **Left-click** — opens a popover listing items grouped by repository, each with kind icon, title, and how long ago it was updated
 - **Click an item** — opens it on github.com
 - **Right-click** — menu with About, Refresh, Re-enter Token, Settings, Quit
