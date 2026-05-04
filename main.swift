@@ -1,5 +1,6 @@
 import Cocoa
 import SwiftUI
+import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -7,6 +8,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventMonitor: Any?
     private let core = LookoutCore()
     private let updateChecker = JorvikUpdateChecker(repoName: "Lookout")
+    private let sparkleUserDriverDelegate = LookoutUserDriverDelegate()
+    private lazy var sparkleUpdater = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: sparkleUserDriverDelegate
+    )
     private var isPulsing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -26,7 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        updateChecker.checkOnSchedule()
+        // Sparkle handles update polling now. JorvikUpdateChecker instance
+        // remains because JorvikSettingsView.showWindow still requires one
+        // as a parameter, pending JorvikKit retirement (§11.5).
+        _ = sparkleUpdater  // forces lazy init so Sparkle starts at launch
+        // updateChecker.checkOnSchedule()  // disabled — Sparkle owns this now
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -211,6 +222,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             actions: [
                 JorvikMenuBuilder.ActionItem(title: "Refresh",     action: #selector(refreshNow),       target: self, keyEquivalent: "r"),
                 JorvikMenuBuilder.ActionItem(title: setupTitle,    action: #selector(showSetupAction),  target: self),
+                JorvikMenuBuilder.ActionItem(title: "-",           action: #selector(refreshNow),       target: self),
+                JorvikMenuBuilder.ActionItem(title: "Check for Updates\u{2026}", action: #selector(checkForUpdates(_:)), target: self),
             ]
         )
 
@@ -223,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showSetupAction() { showSetup() }
     @objc private func openAboutAction() { openAbout() }
     @objc private func openSettingsAction() { openSettings() }
+    @objc func checkForUpdates(_ sender: Any?) { sparkleUpdater.checkForUpdates(sender) }
 
     private func showSetup() {
         if popover.isShown { popover.performClose(nil) }
@@ -248,6 +262,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] in
             MenuBarPillSettings { self?.refreshIcon() }
         }
+    }
+}
+
+/// LSUIElement apps don't auto-activate when they present windows, so
+/// Sparkle's update dialogs would appear behind whatever app is currently
+/// key. This brings Lookout frontmost just before each modal.
+final class LookoutUserDriverDelegate: NSObject, SPUStandardUserDriverDelegate {
+    func standardUserDriverWillShowModalAlert() {
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
