@@ -7,7 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover!
     private var eventMonitor: Any?
     private let core = LookoutCore()
-    private let updateChecker = JorvikUpdateChecker(repoName: "Lookout")
     private let sparkleUserDriverDelegate = LookoutUserDriverDelegate()
     private lazy var sparkleUpdater = SPUStandardUpdaterController(
         startingUpdater: true,
@@ -33,11 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Sparkle handles update polling now. JorvikUpdateChecker instance
-        // remains because JorvikSettingsView.showWindow still requires one
-        // as a parameter, pending JorvikKit retirement (§11.5).
         _ = sparkleUpdater  // forces lazy init so Sparkle starts at launch
-        // updateChecker.checkOnSchedule()  // disabled — Sparkle owns this now
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -259,10 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openSettings() {
         if popover.isShown { popover.performClose(nil) }
-        JorvikSettingsView.showWindow(
-            appName: "Lookout",
-            updateChecker: updateChecker
-        ) { [weak self] in
+        JorvikSettingsView.showWindow(appName: "Lookout") { [weak self] in
             MenuBarPillSettings { self?.refreshIcon() }
         }
     }
