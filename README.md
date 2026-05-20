@@ -80,11 +80,11 @@ Lookout is a Swift app with no dependencies beyond macOS system frameworks. No X
 
 ```bash
 cd ~/Desktop/Lookout
-./build.sh
-open Lookout.app
+gmake build
+open .build/Lookout.app
 ```
 
-The build script generates the `.icns` from `generate_icon.swift`, compiles the Swift sources with `swiftc`, links against Cocoa, SwiftUI, ServiceManagement, and Security, then signs the bundle with the Developer ID identity.
+Requires GNU Make 4.x — `brew install make` installs it as `gmake`. The target is defined in the shared `release.mk` from `jorvik-release/`; signing uses the Developer ID identity.
 
 ## Architecture
 
