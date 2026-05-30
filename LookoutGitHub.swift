@@ -87,12 +87,16 @@ actor LookoutGitHubClient {
         async let notifications = fetchNotifications(token: token)
         async let reviewRequested = fetchReviewRequested(token: token)
         async let failingPRs = fetchFailingPRs(token: token)
+        async let ownedIssues = fetchOwnedRepoIssues(token: token)
 
-        let (notif, review, failing) = try await (notifications, reviewRequested, failingPRs)
+        let (notif, review, failing, owned) = try await (notifications, reviewRequested, failingPRs, ownedIssues)
 
         var seen = Set<String>()
         var combined: [LookoutItem] = []
-        for item in notif.items + review + failing {
+        // Owned-repo issues last so that if the same issue also arrived via a
+        // notification (when the repo *is* watched), the richer notification
+        // entry wins the dedupe.
+        for item in notif.items + review + failing + owned {
             let key = LookoutItem.dedupeKey(item)
             if seen.insert(key).inserted {
                 combined.append(item)
@@ -269,6 +273,136 @@ actor LookoutGitHubClient {
         return try await fetchSearchIssues(token: token, query: q, kind: .ciFailure)
     }
 
+    // MARK: Search — open issues on your own repos
+    //
+    // The notifications inbox only surfaces issues on repos you're *watching*
+    // (subscribed) — a new issue opened by someone else on a repo you own but
+    // aren't watching never generates a notification, so it was invisible to
+    // Lookout. This query catches them directly, independent of watch state.
+    //
+    // `user:<login>` (GitHub search has no @me form for it, so we resolve the
+    // login) scopes to repos you own. A `created:` recency window keeps legacy
+    // imported issues (e.g. a repo seeded with hundreds of years-old tickets)
+    // out of the list while a genuinely new issue stays surfaced until handled.
+    // Window is configurable via the `Lookout.issueLookbackDays` default
+    // (365 if unset).
+    //
+    // Finally, each candidate is kept only if it *needs your attention* — i.e.
+    // the last person to act on it wasn't you. A fresh issue qualifies; once
+    // you reply it drops off until the reporter responds again (which also
+    // re-arrives via the notifications path once you're a participant).
+    private func fetchOwnedRepoIssues(token: String) async throws -> [LookoutItem] {
+        let login = try await authenticatedLogin(token: token)
+        let stored = UserDefaults.standard.integer(forKey: "Lookout.issueLookbackDays")
+        let days = stored > 0 ? stored : 365
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        let q = "is:open is:issue user:\(login) archived:false created:>=\(Self.ymdFormatter.string(from: cutoff))"
+
+        var components = URLComponents(string: "https://api.github.com/search/issues")!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: q),
+            URLQueryItem(name: "per_page", value: "50"),
+            URLQueryItem(name: "sort", value: "updated"),
+        ]
+        var request = URLRequest(url: components.url!)
+        applyAuth(&request, token: token)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+
+        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = dict["items"] as? [[String: Any]] else {
+            throw LookoutGitHubError.decode("search.items missing")
+        }
+
+        // Resolve each candidate's "needs attention" status concurrently.
+        return await withTaskGroup(of: LookoutItem?.self) { group in
+            for entry in entries {
+                group.addTask { await self.ownedIssueNeedingAttention(entry, login: login, token: token) }
+            }
+            var results: [LookoutItem] = []
+            for await item in group {
+                if let item { results.append(item) }
+            }
+            return results
+        }
+    }
+
+    /// Returns a LookoutItem for an owned-repo issue only if it currently needs
+    /// the user's attention — the last actor on the thread wasn't them. Returns
+    /// nil if they spoke last. If the last actor can't be determined, errs
+    /// toward attention (returns the item) so nothing is silently dropped.
+    private func ownedIssueNeedingAttention(_ entry: [String: Any], login: String, token: String) async -> LookoutItem? {
+        guard let number = entry["number"] as? Int,
+              let title = entry["title"] as? String,
+              let htmlURLStr = entry["html_url"] as? String,
+              let htmlURL = URL(string: htmlURLStr),
+              let updatedAtStr = entry["updated_at"] as? String,
+              let updatedAt = parseISODate(updatedAtStr),
+              let repoURLStr = entry["repository_url"] as? String
+        else { return nil }
+
+        let repoName = String(repoURLStr.split(separator: "/").suffix(2).joined(separator: "/"))
+        let author = (entry["user"] as? [String: Any])?["login"] as? String
+        let commentCount = entry["comments"] as? Int ?? 0
+
+        // Who acted last? With comments, it's the latest comment's author;
+        // with none, it's whoever opened the issue. nil = couldn't tell.
+        let lastActor: String?
+        if commentCount > 0 {
+            lastActor = try? await lastCommentAuthor(repoFullName: repoName, number: number, commentCount: commentCount, token: token)
+        } else {
+            lastActor = author
+        }
+
+        // Drop it only if we *positively* know the user acted last.
+        if let lastActor, lastActor == login { return nil }
+
+        return LookoutItem(
+            id: "owned-issue-\(repoName)#\(number)",
+            kind: .issueThread,
+            title: title,
+            repo: repoName,
+            url: htmlURL,
+            updatedAt: updatedAt
+        )
+    }
+
+    /// Login of the most recent comment author on an issue, or nil if there are
+    /// none. Uses the known comment count to jump straight to the last page
+    /// rather than walking every comment.
+    private func lastCommentAuthor(repoFullName: String, number: Int, commentCount: Int, token: String) async throws -> String? {
+        guard commentCount > 0 else { return nil }
+        let perPage = 100
+        let lastPage = max(1, (commentCount + perPage - 1) / perPage)
+        var components = URLComponents(string: "https://api.github.com/repos/\(repoFullName)/issues/\(number)/comments")!
+        components.queryItems = [
+            URLQueryItem(name: "per_page", value: "\(perPage)"),
+            URLQueryItem(name: "page", value: "\(lastPage)"),
+        ]
+        var request = URLRequest(url: components.url!)
+        applyAuth(&request, token: token)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        let arr = try parseJSONArray(data)
+        return (arr.last?["user"] as? [String: Any])?["login"] as? String
+    }
+
+    /// The token's account login (e.g. "PerpetualBeta"). Resolved per poll
+    /// rather than cached, so swapping the token to a different account can't
+    /// leave a stale login scoping the search to the wrong repos. `/user` is a
+    /// cheap call against a 5000/hr budget.
+    private func authenticatedLogin(token: String) async throws -> String {
+        var request = URLRequest(url: URL(string: "https://api.github.com/user")!)
+        applyAuth(&request, token: token)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let login = dict["login"] as? String else {
+            throw LookoutGitHubError.decode("user.login missing")
+        }
+        return login
+    }
+
     private func fetchSearchIssues(token: String, query: String, kind: LookoutItemKind) async throws -> [LookoutItem] {
         var components = URLComponents(string: "https://api.github.com/search/issues")!
         components.queryItems = [
@@ -326,6 +460,15 @@ actor LookoutGitHubClient {
     private static let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    /// UTC `yyyy-MM-dd` for GitHub search date qualifiers.
+    private static let ymdFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
         return f
     }()
 
