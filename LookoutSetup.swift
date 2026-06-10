@@ -14,12 +14,12 @@ struct LookoutSetupSheet: View {
             Text("GitHub Personal Access Token")
                 .font(.headline)
 
-            Text("Paste a fine-grained PAT. It's stored in your Keychain and never sent anywhere except api.github.com.")
+            Text("Paste a classic PAT. Fine-grained tokens aren't supported — GitHub's notifications API rejects them. It's stored in your Keychain and never sent anywhere except api.github.com.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            SecureField("ghp_… or github_pat_…", text: $token)
+            SecureField("ghp_…", text: $token)
                 .textFieldStyle(.roundedBorder)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -38,7 +38,11 @@ struct LookoutSetupSheet: View {
             }
 
             HStack {
-                Link("Create one →", destination: URL(string: "https://github.com/settings/personal-access-tokens/new")!)
+                // Classic-token page with scopes + name pre-filled. NOT the
+                // fine-grained page (settings/personal-access-tokens/new) —
+                // fine-grained tokens hit a 403 on the notifications API.
+                Link("Create a classic token →",
+                     destination: URL(string: "https://github.com/settings/tokens/new?scopes=notifications,repo,read:user&description=Lookout")!)
                     .font(.caption)
                 Spacer()
                 Button("Cancel") { onCancel() }
