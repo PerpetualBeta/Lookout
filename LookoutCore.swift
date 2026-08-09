@@ -25,6 +25,12 @@ final class LookoutCore {
     private(set) var items: [LookoutItem] = []
     private(set) var lastUpdated: Date?
 
+    /// When the next poll is due. Nil while one is in flight, or when the loop is not running.
+    ///
+    /// GitHub dictates the cadence via the poll interval it returns, so this cannot be derived from a
+    /// constant in the UI — it has to come from the loop that actually schedules the sleep.
+    private(set) var nextPollAt: Date?
+
     var unreadCount: Int { items.count }
 
     private let client = LookoutGitHubClient()
@@ -57,6 +63,7 @@ final class LookoutCore {
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        nextPollAt = nil
     }
 
     func refreshNow() {
@@ -90,17 +97,21 @@ final class LookoutCore {
             }
 
             state = .polling
+            nextPollAt = nil                    // a check is happening right now
             onStateChange?()
 
             do {
                 let result = try await client.poll(token: token)
                 await client.setNotificationsLastModified(result.notificationsLastModified)
+                let interval = max(60, result.nextPollAfter)
                 self.items = result.items
                 self.lastUpdated = Date()
+                // Published before the state change, so the panel never renders an .ok with a stale
+                // countdown from the previous cycle.
+                self.nextPollAt = Date().addingTimeInterval(interval)
                 self.state = .ok(items: result.items, lastUpdated: self.lastUpdated!)
                 onStateChange?()
 
-                let interval = max(60, result.nextPollAfter)
                 try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
             } catch is CancellationError {
                 return

@@ -18,7 +18,7 @@ Four signals are deduped into a single list, by URL:
 | GitHub Notifications API | The unified feed: mentions, review requests, assigns, comments, state changes, CI activity on threads you're subscribed to |
 | Search: `is:open is:pr review-requested:@me` | Open PRs requesting your review |
 | Search: `is:open is:pr author:@me status:failure` | Your open PRs with failing CI |
-| Search: `is:open user:<you>` — issues **and** pull requests | Anything open on a repo **you own**, regardless of whether you watch it |
+| Search: `is:open user:<you>` — issues **and** pull requests | Anything open on a repo **you own**, regardless of whether you watch it, at any age |
 
 ### Why that last row exists
 
@@ -33,10 +33,14 @@ and no notification because you do not watch your own repo. Three open PRs on Qu
 for three days. Both halves are now covered.
 
 Owned-repo results are kept only if the **last person to act wasn't you** — a new thread qualifies,
-and it drops off once you reply, until the other party responds again. Issues carry a `created:`
-recency window (365 days, `Lookout.issueLookbackDays`) to keep bulk-imported legacy tickets out;
-pull requests deliberately do not, because nobody bulk-imports PRs and an open one is a request for
-your action that does not expire.
+and it drops off once you reply, until the other party responds again.
+
+**Nothing is filtered by age.** Issues used to carry a 365-day `created:` window, which meant an issue
+still open on its first birthday quietly stopped being reported — the same silent-drop this search
+exists to prevent, just on a delay. An open issue or PR is a request for your action and it does not
+expire. The escape hatch remains for the case the window was written for, a repo seeded with hundreds
+of bulk-imported legacy tickets: set `Lookout.issueLookbackDays` and only issues created inside that
+many days are considered. Unset — the default — nothing is dropped for being old.
 
 ## Installation
 

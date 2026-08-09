@@ -312,10 +312,21 @@ actor LookoutGitHubClient {
             // never answered still needs answering.
             q = "is:open is:pr user:\(login) archived:false"
         } else {
+            // NO WINDOW BY DEFAULT. This used to default to 365 days, which meant an issue still open on
+            // its first birthday silently stopped being reported — precisely the failure this search
+            // exists to prevent, just on a delay. An open issue is a request for your action, and it does
+            // not expire; the same reasoning as pull requests above.
+            //
+            // The escape hatch survives for the case it was written for — a repo seeded with hundreds of
+            // bulk-imported legacy tickets. Set `Lookout.issueLookbackDays` and only issues created inside
+            // that window are considered. Unset, nothing is filtered by age.
             let stored = UserDefaults.standard.integer(forKey: "Lookout.issueLookbackDays")
-            let days = stored > 0 ? stored : 365
-            let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
-            q = "is:open is:issue user:\(login) archived:false created:>=\(Self.ymdFormatter.string(from: cutoff))"
+            if stored > 0 {
+                let cutoff = Date().addingTimeInterval(-Double(stored) * 86_400)
+                q = "is:open is:issue user:\(login) archived:false created:>=\(Self.ymdFormatter.string(from: cutoff))"
+            } else {
+                q = "is:open is:issue user:\(login) archived:false"
+            }
         }
 
         var components = URLComponents(string: "https://api.github.com/search/issues")!
