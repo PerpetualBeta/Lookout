@@ -1,6 +1,6 @@
 # Lookout
 
-A native macOS menu-bar app that watches GitHub for things needing your attention — mentions, review requests, assigned issues, comments on threads you're in, and your own pull requests with failing CI.
+A native macOS menu-bar app that watches GitHub for things needing your attention — mentions, review requests, assigned issues, comments on threads you're in, your own pull requests with failing CI, and anything opened on a repo you own.
 
 ## What it does
 
@@ -11,13 +11,32 @@ A native macOS menu-bar app that watches GitHub for things needing your attentio
 - **Right-click** — menu with About, Refresh, Re-enter Token, Check for Updates…, Settings, Quit
 - **Mark all read** in the popover footer clears unread notifications on GitHub itself (`PUT /notifications`)
 
-Three signals are deduped into a single list:
+Four signals are deduped into a single list, by URL:
 
 | Source | What it covers |
 |---|---|
 | GitHub Notifications API | The unified feed: mentions, review requests, assigns, comments, state changes, CI activity on threads you're subscribed to |
 | Search: `is:open is:pr review-requested:@me` | Open PRs requesting your review |
 | Search: `is:open is:pr author:@me status:failure` | Your open PRs with failing CI |
+| Search: `is:open user:<you>` — issues **and** pull requests | Anything open on a repo **you own**, regardless of whether you watch it |
+
+### Why that last row exists
+
+The notifications inbox only fires for repos you are **subscribed** to, and owning a repo does not
+subscribe you to it. Open something on a repo you own but do not watch and GitHub tells you nothing —
+so Lookout, reading only the inbox, told you nothing either.
+
+That was fixed for issues, and then **not** for pull requests, because GitHub's `is:issue` search
+qualifier *excludes* PRs. A pull request opened by someone else on your own repo therefore matched
+nothing at all: no review requested of you, not authored by you, excluded from the owned-repo search,
+and no notification because you do not watch your own repo. Three open PRs on QuitProtect sat unseen
+for three days. Both halves are now covered.
+
+Owned-repo results are kept only if the **last person to act wasn't you** — a new thread qualifies,
+and it drops off once you reply, until the other party responds again. Issues carry a `created:`
+recency window (365 days, `Lookout.issueLookbackDays`) to keep bulk-imported legacy tickets out;
+pull requests deliberately do not, because nobody bulk-imports PRs and an open one is a request for
+your action that does not expire.
 
 ## Installation
 

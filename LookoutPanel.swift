@@ -31,9 +31,13 @@ struct LookoutPanel: View {
             case .polling:
                 ProgressView().controlSize(.small)
             case .ok(_, let when):
-                Text(relative(when))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                // Live, so it keeps meaning something after the poll that set it.
+                TimelineView(.periodic(from: when, by: 30)) { _ in
+                    Text(checkedLabel(when))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .help("Last checked at \(when.formatted(date: .omitted, time: .shortened))")
             default:
                 EmptyView()
             }
@@ -186,6 +190,22 @@ struct LookoutPanel: View {
             .sorted { $0.repo.lowercased() < $1.repo.lowercased() }
     }
 
+    /// "Checked just now" / "Checked 5 min. ago".
+    ///
+    /// This was a bare relative string rendered at the instant a poll finished — a relative time measured
+    /// against a date that was, right then, the present — so it read "in 0 sec". And nothing re-rendered it
+    /// afterwards, so it *stayed* "in 0 sec" until the next poll produced the same zero again. Two faults:
+    /// the phrasing at zero, and a clock that never moved. TimelineView fixes the second; naming the
+    /// sub-minute case outright fixes the first, since "0 sec ago" is no better than "in 0 sec".
+    private func checkedLabel(_ when: Date) -> String {
+        let elapsed = Date().timeIntervalSince(when)
+        if elapsed < 60 { return "Checked just now" }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        f.dateTimeStyle = .numeric
+        return "Checked \(f.localizedString(for: when, relativeTo: Date()))"
+    }
+
     private func relative(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -221,6 +241,7 @@ private struct ItemRow: View {
         case .reviewRequested: .blue
         case .mention: .purple
         case .assigned: .orange
+        case .prThread: .green          // GitHub's own colour for an open PR
         default: .secondary
         }
     }

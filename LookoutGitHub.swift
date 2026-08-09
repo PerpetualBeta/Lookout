@@ -87,13 +87,13 @@ actor LookoutGitHubClient {
         async let notifications = fetchNotifications(token: token)
         async let reviewRequested = fetchReviewRequested(token: token)
         async let failingPRs = fetchFailingPRs(token: token)
-        async let ownedIssues = fetchOwnedRepoIssues(token: token)
+        async let ownedThreads = fetchOwnedRepoThreads(token: token)
 
-        let (notif, review, failing, owned) = try await (notifications, reviewRequested, failingPRs, ownedIssues)
+        let (notif, review, failing, owned) = try await (notifications, reviewRequested, failingPRs, ownedThreads)
 
         var seen = Set<String>()
         var combined: [LookoutItem] = []
-        // Owned-repo issues last so that if the same issue also arrived via a
+        // Owned-repo threads last so that if the same one also arrived via a
         // notification (when the repo *is* watched), the richer notification
         // entry wins the dedupe.
         for item in notif.items + review + failing + owned {
@@ -273,30 +273,50 @@ actor LookoutGitHubClient {
         return try await fetchSearchIssues(token: token, query: q, kind: .ciFailure)
     }
 
-    // MARK: Search — open issues on your own repos
+    // MARK: Search — open issues AND pull requests on your own repos
     //
-    // The notifications inbox only surfaces issues on repos you're *watching*
-    // (subscribed) — a new issue opened by someone else on a repo you own but
-    // aren't watching never generates a notification, so it was invisible to
-    // Lookout. This query catches them directly, independent of watch state.
+    // The notifications inbox only surfaces threads on repos you're *watching*
+    // (subscribed) — one opened by someone else on a repo you own but aren't
+    // watching never generates a notification, so it was invisible to Lookout.
+    // These queries catch them directly, independent of watch state.
+    //
+    // PULL REQUESTS WERE MISSING UNTIL 2026-08-09. This search was written for
+    // issues and used `is:issue`, which in GitHub search *excludes* PRs. The
+    // other two PR queries are `review-requested:@me` and `author:@me`, so a PR
+    // opened by someone else on your own repo matched nothing anywhere: no
+    // review requested, not authored by you, excluded from the owned-repo
+    // search, and no notification because you don't watch your own repo. Three
+    // open PRs on QuitProtect sat unseen for three days. Same gap, same fix.
     //
     // `user:<login>` (GitHub search has no @me form for it, so we resolve the
-    // login) scopes to repos you own. A `created:` recency window keeps legacy
-    // imported issues (e.g. a repo seeded with hundreds of years-old tickets)
-    // out of the list while a genuinely new issue stays surfaced until handled.
-    // Window is configurable via the `Lookout.issueLookbackDays` default
-    // (365 if unset).
+    // login) scopes to repos you own.
     //
     // Finally, each candidate is kept only if it *needs your attention* — i.e.
-    // the last person to act on it wasn't you. A fresh issue qualifies; once
-    // you reply it drops off until the reporter responds again (which also
+    // the last person to act on it wasn't you. A fresh thread qualifies; once
+    // you reply it drops off until the other party responds again (which also
     // re-arrives via the notifications path once you're a participant).
-    private func fetchOwnedRepoIssues(token: String) async throws -> [LookoutItem] {
+    private func fetchOwnedRepoThreads(token: String) async throws -> [LookoutItem] {
+        // One /user call, both searches concurrent.
         let login = try await authenticatedLogin(token: token)
-        let stored = UserDefaults.standard.integer(forKey: "Lookout.issueLookbackDays")
-        let days = stored > 0 ? stored : 365
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
-        let q = "is:open is:issue user:\(login) archived:false created:>=\(Self.ymdFormatter.string(from: cutoff))"
+        async let issues = ownedRepoSearch(token: token, login: login, kind: .issueThread)
+        async let prs    = ownedRepoSearch(token: token, login: login, kind: .prThread)
+        return try await issues + prs
+    }
+
+    private func ownedRepoSearch(token: String, login: String, kind: LookoutItemKind) async throws -> [LookoutItem] {
+        let q: String
+        if kind == .prThread {
+            // No recency window, deliberately. The window on issues exists to keep a repo seeded with
+            // hundreds of years-old imported tickets out of the list. Nobody bulk-imports pull requests,
+            // and an open PR is a request for your action that does not expire — a two-year-old one you
+            // never answered still needs answering.
+            q = "is:open is:pr user:\(login) archived:false"
+        } else {
+            let stored = UserDefaults.standard.integer(forKey: "Lookout.issueLookbackDays")
+            let days = stored > 0 ? stored : 365
+            let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+            q = "is:open is:issue user:\(login) archived:false created:>=\(Self.ymdFormatter.string(from: cutoff))"
+        }
 
         var components = URLComponents(string: "https://api.github.com/search/issues")!
         components.queryItems = [
@@ -317,7 +337,7 @@ actor LookoutGitHubClient {
         // Resolve each candidate's "needs attention" status concurrently.
         return await withTaskGroup(of: LookoutItem?.self) { group in
             for entry in entries {
-                group.addTask { await self.ownedIssueNeedingAttention(entry, login: login, token: token) }
+                group.addTask { await self.ownedThreadNeedingAttention(entry, login: login, token: token, kind: kind) }
             }
             var results: [LookoutItem] = []
             for await item in group {
@@ -327,11 +347,16 @@ actor LookoutGitHubClient {
         }
     }
 
-    /// Returns a LookoutItem for an owned-repo issue only if it currently needs
-    /// the user's attention — the last actor on the thread wasn't them. Returns
-    /// nil if they spoke last. If the last actor can't be determined, errs
-    /// toward attention (returns the item) so nothing is silently dropped.
-    private func ownedIssueNeedingAttention(_ entry: [String: Any], login: String, token: String) async -> LookoutItem? {
+    /// Returns a LookoutItem for an owned-repo issue or pull request only if it
+    /// currently needs the user's attention — the last actor on the thread
+    /// wasn't them. Returns nil if they spoke last. If the last actor can't be
+    /// determined, errs toward attention (returns the item) so nothing is
+    /// silently dropped.
+    ///
+    /// Works unchanged for PRs: search returns them in the issue shape, and
+    /// `/issues/<n>/comments` is the PR's conversation thread.
+    private func ownedThreadNeedingAttention(_ entry: [String: Any], login: String, token: String,
+                                             kind: LookoutItemKind) async -> LookoutItem? {
         guard let number = entry["number"] as? Int,
               let title = entry["title"] as? String,
               let htmlURLStr = entry["html_url"] as? String,
@@ -358,8 +383,8 @@ actor LookoutGitHubClient {
         if let lastActor, lastActor == login { return nil }
 
         return LookoutItem(
-            id: "owned-issue-\(repoName)#\(number)",
-            kind: .issueThread,
+            id: "owned-\(kind.rawValue)-\(repoName)#\(number)",
+            kind: kind,
             title: title,
             repo: repoName,
             url: htmlURL,
