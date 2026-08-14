@@ -49,6 +49,12 @@ Two formats on every release — both signed and notarised, pick whichever suits
 - **[Installer (`.pkg`)](https://github.com/PerpetualBeta/Lookout/releases/latest/download/Lookout.pkg)** — recommended for first-time installs. Double-click to run; macOS Installer places the app in `/Applications` without quarantine or App Translocation.
 - **[Download (`.zip`)](https://github.com/PerpetualBeta/Lookout/releases/latest)** — unzip and drag `Lookout.app` to your Applications folder.
 
+Or install it with [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask perpetualbeta/jorvik/lookout
+```
+
 After installation, launch Lookout — a binoculars icon appears in the menu bar. On first launch a sheet asks for a GitHub Personal Access Token (see **Setup** below).
 
 ## Setup
