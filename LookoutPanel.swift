@@ -56,8 +56,8 @@ struct LookoutPanel: View {
         switch core.state {
         case .unconfigured:
             unconfiguredView
-        case .error(let msg):
-            errorView(msg)
+        case .error(let msg, let tokenRejected):
+            errorView(msg, tokenRejected: tokenRejected)
         case .idle, .polling, .ok:
             if core.items.isEmpty {
                 emptyView
@@ -87,7 +87,7 @@ struct LookoutPanel: View {
         .frame(maxWidth: .infinity, minHeight: 200)
     }
 
-    private func errorView(_ msg: String) -> some View {
+    private func errorView(_ msg: String, tokenRejected: Bool) -> some View {
         VStack(spacing: 10) {
             Spacer(minLength: 0)
             Image(systemName: "exclamationmark.triangle.fill")
@@ -99,7 +99,13 @@ struct LookoutPanel: View {
                 .padding(.horizontal, 24)
             HStack {
                 Button("Retry") { core.refreshNow() }
-                Button("Re-enter Token…") { onSetup() }
+                // Only when GitHub refused the credential. This used to appear for
+                // every error — during the 2026-08-17 GitHub outage it proposed
+                // replacing a working token as the cure for a 503. A deliberate
+                // re-entry is always available from the ⋯ menu below.
+                if tokenRejected {
+                    Button("Re-enter Token…") { onSetup() }
+                }
             }
             Spacer(minLength: 0)
         }

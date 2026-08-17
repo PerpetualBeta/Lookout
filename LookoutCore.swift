@@ -7,13 +7,18 @@ enum LookoutState: Equatable {
     case idle
     case polling
     case ok(items: [LookoutItem], lastUpdated: Date)
-    case error(String)
+    // tokenRejected distinguishes "GitHub refused the credential" from every other
+    // failure (outage, rate limit, network). The panel offers token re-entry only
+    // when the token is actually the suspect — a 503 is GitHub's fault, not the
+    // token's, and offering "Re-enter Token…" there invites revoking a perfectly
+    // good credential while chasing an outage.
+    case error(message: String, tokenRejected: Bool)
 
     static func == (lhs: LookoutState, rhs: LookoutState) -> Bool {
         switch (lhs, rhs) {
         case (.unconfigured, .unconfigured), (.idle, .idle), (.polling, .polling): return true
         case (.ok(let a, let da), .ok(let b, let db)): return a == b && da == db
-        case (.error(let a), .error(let b)): return a == b
+        case (.error(let a, let ta), .error(let b, let tb)): return a == b && ta == tb
         default: return false
         }
     }
@@ -116,16 +121,16 @@ final class LookoutCore {
             } catch is CancellationError {
                 return
             } catch let LookoutGitHubError.unauthorized(detail) {
-                self.state = .error("GitHub rejected the token.\n\(detail)")
+                self.state = .error(message: "GitHub rejected the token.\n\(detail)", tokenRejected: true)
                 onStateChange?()
                 return
             } catch let LookoutGitHubError.rateLimited(retryAfter) {
                 let wait = max(60, retryAfter ?? 120)
-                self.state = .error("Rate limited; retrying in \(Int(wait))s")
+                self.state = .error(message: "Rate limited; retrying in \(Int(wait))s", tokenRejected: false)
                 onStateChange?()
                 try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             } catch {
-                self.state = .error(error.localizedDescription)
+                self.state = .error(message: error.localizedDescription, tokenRejected: false)
                 onStateChange?()
                 try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
             }
