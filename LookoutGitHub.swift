@@ -65,11 +65,10 @@ actor LookoutGitHubClient {
     private let session: URLSession
     private var notificationsLastModified: String?
     // Items parsed from the most recent 200 OK on /notifications.
-    // Returned verbatim on 304 Not Modified so that the user-visible
-    // "needs attention" state persists across polls until either the
-    // user resolves the thread (mark-as-read on github.com or via our
-    // markAllNotificationsRead) or GitHub emits a 200 with a different
-    // (possibly empty) list.
+    // Returned verbatim on 304 Not Modified. A 304 is only trusted while
+    // this cache is EMPTY — Last-Modified moves on new notifications but
+    // not on read-state changes, so it can prove nothing has arrived, but
+    // never that nothing has departed (see fetchNotifications).
     private var notificationsCache: [LookoutItem] = []
 
     init() {
@@ -187,7 +186,14 @@ actor LookoutGitHubClient {
     private func fetchNotifications(token: String) async throws -> NotificationsResult {
         var request = URLRequest(url: URL(string: "https://api.github.com/notifications")!)
         applyAuth(&request, token: token)
-        if let lm = notificationsLastModified {
+        // If-Modified-Since can only signal ARRIVALS. GitHub's Last-Modified
+        // on /notifications does not move when a thread is read elsewhere —
+        // resolve everything on github.com and this endpoint 304s for ever,
+        // so a non-empty cache would keep a ghost on screen indefinitely
+        // (it did: twelve hours, one read thread). Use the conditional
+        // request only while we're showing nothing; while items are on
+        // screen, poll unconditionally so departures are seen too.
+        if notificationsCache.isEmpty, let lm = notificationsLastModified {
             request.setValue(lm, forHTTPHeaderField: "If-Modified-Since")
         }
 
