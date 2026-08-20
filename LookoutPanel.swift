@@ -213,12 +213,6 @@ struct LookoutPanel: View {
         if remaining < 60 { return "Next check in \(remaining)s" }
         return "Next check in \(remaining / 60) min"
     }
-
-    private func relative(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
 }
 
 private struct ItemRow: View {
@@ -233,7 +227,11 @@ private struct ItemRow: View {
                 Text(item.title)
                     .font(.callout)
                     .lineLimit(2)
-                Text(relative(item.updatedAt))
+                // Self-updating relative date. A formatter call here renders
+                // ONCE and fossilises — nothing invalidates this row, so a
+                // "33 sec ago" stayed 33 sec ago for twelve hours. The
+                // system-driven style re-renders itself as time passes.
+                Text("\(item.updatedAt, style: .relative) ago")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -252,11 +250,5 @@ private struct ItemRow: View {
         case .prThread: .green          // GitHub's own colour for an open PR
         default: .secondary
         }
-    }
-
-    private func relative(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
