@@ -276,7 +276,77 @@ actor LookoutGitHubClient {
 
     private func fetchFailingPRs(token: String) async throws -> [LookoutItem] {
         let q = "is:open is:pr author:@me status:failure archived:false"
-        return try await fetchSearchIssues(token: token, query: q, kind: .ciFailure)
+        let candidates = try await fetchSearchIssues(token: token, query: q, kind: .ciFailure)
+
+        // `status:failure` aggregates every check run on the head commit, so a
+        // failed suite keeps matching after a later suite passes on the SAME
+        // commit. That happens whenever a run is retriggered by reopening the
+        // pull request instead of re-running the job: GitHub attaches a second
+        // suite and the first one never goes away. The search then reports a
+        // failure for ever, `gh pr checks` reports a pass, and nothing the
+        // author does clears the row — not merging, and certainly not "Mark all
+        // read", which only touches /notifications.
+        //
+        // Observed on RememberMyWindow#22 on 2026-09-04: one commit, two
+        // suites, one failure and one success, and the row would have stayed
+        // until the branch got a new head commit.
+        //
+        // So treat the search as a shortlist and keep an item only when the
+        // NEWEST run of some check name really did fail.
+        var confirmed: [LookoutItem] = []
+        for item in candidates {
+            do {
+                if try await prIsStillFailing(token: token, item: item) {
+                    confirmed.append(item)
+                }
+            } catch {
+                // A check that could not be made is not evidence of success.
+                // Keep the item rather than hide a real failure.
+                confirmed.append(item)
+            }
+        }
+        return confirmed
+    }
+
+    /// True when the most recent run of at least one check name ended badly.
+    ///
+    /// Grouping by name matters: a commit can carry several runs of one check,
+    /// and only the last of them describes the state now.
+    private func prIsStillFailing(token: String, item: LookoutItem) async throws -> Bool {
+        guard let number = Int(item.url.lastPathComponent) else { return true }
+
+        var prRequest = URLRequest(url: URL(string:
+            "https://api.github.com/repos/\(item.repo)/pulls/\(number)")!)
+        applyAuth(&prRequest, token: token)
+        let (prData, prResponse) = try await session.data(for: prRequest)
+        try validate(prResponse, data: prData)
+        guard let pr = try JSONSerialization.jsonObject(with: prData) as? [String: Any],
+              let head = pr["head"] as? [String: Any],
+              let sha = head["sha"] as? String
+        else { return true }
+
+        var runsRequest = URLRequest(url: URL(string:
+            "https://api.github.com/repos/\(item.repo)/commits/\(sha)/check-runs?per_page=100")!)
+        applyAuth(&runsRequest, token: token)
+        let (runsData, runsResponse) = try await session.data(for: runsRequest)
+        try validate(runsResponse, data: runsData)
+        guard let body = try JSONSerialization.jsonObject(with: runsData) as? [String: Any],
+              let runs = body["check_runs"] as? [[String: Any]]
+        else { return true }
+
+        var newest: [String: (when: Date, conclusion: String)] = [:]
+        for run in runs {
+            guard let name = run["name"] as? String else { continue }
+            let when = (run["completed_at"] as? String).flatMap(parseISODate)
+                ?? (run["started_at"] as? String).flatMap(parseISODate)
+                ?? Date.distantPast
+            let conclusion = (run["conclusion"] as? String) ?? ""
+            if let seen = newest[name], seen.when >= when { continue }
+            newest[name] = (when, conclusion)
+        }
+
+        let bad: Set<String> = ["failure", "timed_out", "action_required"]
+        return newest.values.contains { bad.contains($0.conclusion) }
     }
 
     // MARK: Search — open issues AND pull requests on your own repos
