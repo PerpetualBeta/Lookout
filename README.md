@@ -35,6 +35,15 @@ for three days. Both halves are now covered.
 Owned-repo results are kept only if the **last person to act wasn't you** — a new thread qualifies,
 and it drops off once you reply, until the other party responds again.
 
+Reacting counts as acting. A thread whose last comment you have reacted to — any reaction, not just a
+thumbs-up — is not one waiting on you, and drops off the same way a reply would. Without this an
+answered report reported itself for ever: the other party's "thanks, will do" stays the last comment
+permanently, so the thread could never clear except by closing the issue, which is wrong when you are
+legitimately waiting on them. It corrects itself, which is what makes it safe — the moment they
+comment again, the newest comment carries no reaction of yours and the thread returns. The reactions
+of a comment are only looked up when the comment reports having some, so a thread nobody has reacted
+to costs no extra request.
+
 **Nothing is filtered by age.** Issues used to carry a 365-day `created:` window, which meant an issue
 still open on its first birthday quietly stopped being reported — the same silent-drop this search
 exists to prevent, just on a delay. An open issue or PR is a request for your action and it does not

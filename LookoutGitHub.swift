@@ -460,14 +460,31 @@ actor LookoutGitHubClient {
         // Who acted last? With comments, it's the latest comment's author;
         // with none, it's whoever opened the issue. nil = couldn't tell.
         let lastActor: String?
+        var latest: LastComment?
         if commentCount > 0 {
-            lastActor = try? await lastCommentAuthor(repoFullName: repoName, number: number, commentCount: commentCount, token: token)
+            latest = try? await lastComment(repoFullName: repoName, number: number, commentCount: commentCount, token: token)
+            lastActor = latest?.author
         } else {
             lastActor = author
         }
 
         // Drop it only if we *positively* know the user acted last.
         if let lastActor, lastActor == login { return nil }
+
+        // Speaking is not the only way to act. Reacting to the last comment is
+        // how you acknowledge something you have nothing further to add to, and
+        // a thread you have thumbed-up is not one waiting on you. Without this,
+        // an answered report kept reporting itself: the other party's "thanks,
+        // will do" is the last comment for ever, so the thread never clears
+        // until it is closed.
+        //
+        // It corrects itself, which is what makes it safe: the moment they
+        // comment again, the last comment is a new one carrying no reaction of
+        // yours, and the thread comes straight back.
+        if let latest, latest.reactionCount > 0, let commentID = latest.id,
+           (try? await hasReacted(login: login, repoFullName: repoName, commentID: commentID, token: token)) == true {
+            return nil
+        }
 
         return LookoutItem(
             id: "owned-\(kind.rawValue)-\(repoName)#\(number)",
@@ -479,10 +496,16 @@ actor LookoutGitHubClient {
         )
     }
 
-    /// Login of the most recent comment author on an issue, or nil if there are
-    /// none. Uses the known comment count to jump straight to the last page
-    /// rather than walking every comment.
-    private func lastCommentAuthor(repoFullName: String, number: Int, commentCount: Int, token: String) async throws -> String? {
+    /// The most recent comment on an issue: who wrote it, its id, and how many
+    /// reactions it carries. Uses the known comment count to jump straight to
+    /// the last page rather than walking every comment.
+    private struct LastComment {
+        let author: String?
+        let id: Int?
+        let reactionCount: Int
+    }
+
+    private func lastComment(repoFullName: String, number: Int, commentCount: Int, token: String) async throws -> LastComment? {
         guard commentCount > 0 else { return nil }
         let perPage = 100
         let lastPage = max(1, (commentCount + perPage - 1) / perPage)
@@ -496,7 +519,29 @@ actor LookoutGitHubClient {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let arr = try parseJSONArray(data)
-        return (arr.last?["user"] as? [String: Any])?["login"] as? String
+        guard let last = arr.last else { return nil }
+        return LastComment(
+            author: (last["user"] as? [String: Any])?["login"] as? String,
+            id: last["id"] as? Int,
+            reactionCount: (last["reactions"] as? [String: Any])?["total_count"] as? Int ?? 0
+        )
+    }
+
+    /// Whether `login` has reacted to a comment — any reaction, not just a
+    /// thumbs-up. Reacting is how you acknowledge something you have no more to
+    /// say about, and a 👀 means "seen" as surely as a 👍 does.
+    ///
+    /// Only called when the comment carries at least one reaction, so a thread
+    /// nobody has reacted to costs no extra request.
+    private func hasReacted(login: String, repoFullName: String, commentID: Int, token: String) async throws -> Bool {
+        var components = URLComponents(string: "https://api.github.com/repos/\(repoFullName)/issues/comments/\(commentID)/reactions")!
+        components.queryItems = [URLQueryItem(name: "per_page", value: "100")]
+        var request = URLRequest(url: components.url!)
+        applyAuth(&request, token: token)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        let arr = try parseJSONArray(data)
+        return arr.contains { ($0["user"] as? [String: Any])?["login"] as? String == login }
     }
 
     /// The token's account login (e.g. "PerpetualBeta"). Resolved per poll
