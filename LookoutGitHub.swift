@@ -9,6 +9,7 @@ enum LookoutItemKind: String {
     case ciFailure
     case prThread
     case issueThread
+    case discussionThread
     case other
 
     var symbolName: String {
@@ -21,6 +22,7 @@ enum LookoutItemKind: String {
         case .ciFailure:       "xmark.octagon"
         case .prThread:        "arrow.triangle.pull"
         case .issueThread:     "smallcircle.filled.circle"
+        case .discussionThread: "bubble.left.and.bubble.right"
         case .other:           "bell"
         }
     }
@@ -376,7 +378,8 @@ actor LookoutGitHubClient {
         let login = try await authenticatedLogin(token: token)
         async let issues = ownedRepoSearch(token: token, login: login, kind: .issueThread)
         async let prs    = ownedRepoSearch(token: token, login: login, kind: .prThread)
-        return try await issues + prs
+        async let discussions = ownedRepoDiscussionSearch(token: token, login: login)
+        return try await issues + prs + discussions
     }
 
     private func ownedRepoSearch(token: String, login: String, kind: LookoutItemKind) async throws -> [LookoutItem] {
@@ -494,6 +497,147 @@ actor LookoutGitHubClient {
             url: htmlURL,
             updatedAt: updatedAt
         )
+    }
+
+    // MARK: - Discussions
+
+    /// Open discussions on repos the user owns, kept only when the last person
+    /// to act on one wasn't them.
+    ///
+    /// **This is the only GraphQL call in the app, and it has to be.** The two
+    /// owned-repo searches above run against `/search/issues`, and that endpoint
+    /// does not index discussions at all. No query string reaches them, because
+    /// there is no REST search for discussions to reach them with.
+    ///
+    /// **Why it exists: the same gap, a third time.** Issues on an unwatched
+    /// owned repo were invisible, and that was fixed. Pull requests were still
+    /// invisible because GitHub search's `is:issue` excludes them, and that was
+    /// fixed. A discussion is neither, so it stayed invisible. Measured
+    /// 2026-09-22: seven discussions on SaveCannes opened across two days, every
+    /// one unanswered, and the notifications inbox held nothing for any of them.
+    /// Owning a repo does not subscribe you to it, which is the premise this
+    /// whole family of searches exists for.
+    ///
+    /// One request answers the entire question, which makes this the *cheapest*
+    /// of the three rather than the most expensive. The issue path needs a
+    /// second call for the last comment and a third to learn whether the user
+    /// reacted to it; here the author, the last comment's author and both
+    /// reaction states arrive together.
+    private func ownedRepoDiscussionSearch(token: String, login: String) async throws -> [LookoutItem] {
+        let query = """
+        query($q: String!) {
+          search(query: $q, type: DISCUSSION, first: 50) {
+            nodes { ... on Discussion {
+              number title url updatedAt isAnswered locked
+              reactionGroups { viewerHasReacted }
+              repository { nameWithOwner }
+              author { login }
+              comments(last: 1) {
+                totalCount
+                nodes { author { login } reactionGroups { viewerHasReacted } }
+              }
+            } }
+          }
+        }
+        """
+        // `user:<login>` scopes to repos you own, exactly as the REST searches
+        // do. GitHub search has no @me form for it, so the login is resolved
+        // once by the caller and shared between all three.
+        var request = URLRequest(url: URL(string: "https://api.github.com/graphql")!)
+        request.httpMethod = "POST"
+        applyAuth(&request, token: token)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "query": query,
+            "variables": ["q": "is:open user:\(login)"],
+        ])
+
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LookoutGitHubError.decode("graphql: response was not an object")
+        }
+        // **GraphQL reports failure with HTTP 200 and an `errors` array**, so
+        // `validate` cannot see it. Ignored, a bad query or a token missing the
+        // scope yields an empty list, which looks exactly like "nothing needs
+        // you" — the precise failure this search was written to end. So it is
+        // raised rather than swallowed.
+        if let errors = root["errors"] as? [[String: Any]], !errors.isEmpty {
+            let messages = errors.compactMap { $0["message"] as? String }.joined(separator: "; ")
+            throw LookoutGitHubError.decode("graphql: \(messages)")
+        }
+        guard let search = (root["data"] as? [String: Any])?["search"] as? [String: Any],
+              let nodes = search["nodes"] as? [[String: Any]] else {
+            throw LookoutGitHubError.decode("graphql: search.nodes missing")
+        }
+
+        return nodes.compactMap { discussionNeedingAttention($0, login: login) }
+    }
+
+    /// A discussion, kept only if it currently needs the user's attention.
+    ///
+    /// Mirrors `ownedThreadNeedingAttention`: the last person to act wasn't
+    /// them, and reacting counts as acting. It differs in one way, on purpose.
+    /// For an issue the reaction test looks only at the last *comment*, because
+    /// an issue is a body followed by a conversation. A discussion is very often
+    /// nothing but its opening post, and a reaction to that post is how you
+    /// acknowledge it. So the test is applied to whatever was said last: the
+    /// final comment if there is one, otherwise the discussion itself.
+    ///
+    /// An answered discussion is resolved by definition and drops off. Outside a
+    /// Q&A category `isAnswered` is null, which reads as "not answered" and
+    /// keeps the thread, which is what you want for the ordinary case.
+    private func discussionNeedingAttention(_ node: [String: Any], login: String) -> LookoutItem? {
+        guard let number = node["number"] as? Int,
+              let title = node["title"] as? String,
+              let urlString = node["url"] as? String,
+              let url = URL(string: urlString),
+              let updatedAtString = node["updatedAt"] as? String,
+              let updatedAt = parseISODate(updatedAtString),
+              let repo = (node["repository"] as? [String: Any])?["nameWithOwner"] as? String
+        else { return nil }
+
+        if node["isAnswered"] as? Bool == true { return nil }
+        // A locked discussion cannot be replied to, so it is not waiting on you.
+        if node["locked"] as? Bool == true { return nil }
+
+        let author = (node["author"] as? [String: Any])?["login"] as? String
+        let comments = node["comments"] as? [String: Any]
+        let commentCount = comments?["totalCount"] as? Int ?? 0
+        let lastComment = (comments?["nodes"] as? [[String: Any]])?.last
+        let lastThingSaid: [String: Any]? = commentCount > 0 ? lastComment : node
+
+        let lastActor = commentCount > 0
+            ? (lastComment?["author"] as? [String: Any])?["login"] as? String
+            : author
+
+        // Drop it only if we *positively* know the user acted last. A deleted
+        // account reads as a null author, and that errs toward attention rather
+        // than toward silence.
+        if let lastActor, lastActor == login { return nil }
+        if selfReacted(lastThingSaid) { return nil }
+
+        return LookoutItem(
+            id: "owned-discussion-\(repo)#\(number)",
+            kind: .discussionThread,
+            title: title,
+            repo: repo,
+            url: url,
+            updatedAt: updatedAt
+        )
+    }
+
+    /// Whether the authenticated user has left any reaction on a discussion or
+    /// one of its comments.
+    ///
+    /// There is no `viewerHasReacted` to ask for. Checked against the live
+    /// schema 2026-09-22: the field exists on neither `Discussion` nor
+    /// `DiscussionComment`. Reactions come back grouped by emoji instead, each
+    /// group carrying its own flag, so any one of them being true is the answer.
+    private func selfReacted(_ node: [String: Any]?) -> Bool {
+        guard let groups = node?["reactionGroups"] as? [[String: Any]] else { return false }
+        return groups.contains { $0["viewerHasReacted"] as? Bool == true }
     }
 
     /// The most recent comment on an issue: who wrote it, its id, and how many
