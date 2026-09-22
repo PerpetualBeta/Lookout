@@ -11,7 +11,7 @@ A native macOS menu-bar app that watches GitHub for things needing your attentio
 - **Right-click** — menu with About, Refresh, Re-enter Token, Check for Updates…, Settings, Quit
 - **Mark all read** in the popover footer clears unread notifications on GitHub itself (`PUT /notifications`)
 
-Four signals are deduped into a single list, by URL:
+Five signals are deduped into a single list, by URL:
 
 | Source | What it covers |
 |---|---|
@@ -19,6 +19,7 @@ Four signals are deduped into a single list, by URL:
 | Search: `is:open is:pr review-requested:@me` | Open PRs requesting your review |
 | Search: `is:open is:pr author:@me status:failure` | Your open PRs with failing CI |
 | Search: `is:open user:<you>` — issues **and** pull requests | Anything open on a repo **you own**, regardless of whether you watch it, at any age |
+| GraphQL search: `is:open user:<you>`, `type: DISCUSSION` | Open discussions on a repo **you own**. Needs GraphQL: the REST search endpoint does not index discussions |
 
 ### Why that last row exists
 
@@ -30,9 +31,17 @@ That was fixed for issues, and then **not** for pull requests, because GitHub's 
 qualifier *excludes* PRs. A pull request opened by someone else on your own repo therefore matched
 nothing at all: no review requested of you, not authored by you, excluded from the owned-repo search,
 and no notification because you do not watch your own repo. Three open PRs on QuitProtect sat unseen
-for three days. Both halves are now covered.
+for three days.
 
-Owned-repo results are kept only if the **last person to act wasn't you** — a new thread qualifies,
+Then it happened a third time, to **discussions**. A discussion is neither an issue nor a pull
+request, and the REST search endpoint the two rows above use does not index discussions at all, so no
+query string could have reached them. Seven discussions on Save Cannes, opened over two days, sat
+unanswered with nothing in the notifications inbox for any of them. That row needs GraphQL, which is
+the only GraphQL call in the app.
+
+All three are now covered.
+
+Owned-repo results, discussions included, are kept only if the **last person to act wasn't you** — a new thread qualifies,
 and it drops off once you reply, until the other party responds again.
 
 Reacting counts as acting. A thread whose last comment you have reacted to — any reaction, not just a
@@ -43,6 +52,13 @@ legitimately waiting on them. It corrects itself, which is what makes it safe �
 comment again, the newest comment carries no reaction of yours and the thread returns. The reactions
 of a comment are only looked up when the comment reports having some, so a thread nobody has reacted
 to costs no extra request.
+
+Discussions apply that same rule with one deliberate difference: the reaction test looks at whatever
+was said **last**, which for a discussion with no replies is the opening post itself. An issue is a
+body followed by a conversation, so its last comment is the right place to look; a discussion is very
+often nothing but its opening post, and a reaction to that post is how you acknowledge it. A
+discussion also drops off once it is marked as **answered**, or if it is **locked**, since neither is
+waiting on a reply from you.
 
 **Nothing is filtered by age.** Issues used to carry a 365-day `created:` window, which meant an issue
 still open on its first birthday quietly stopped being reported — the same silent-drop this search
