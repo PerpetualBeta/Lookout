@@ -204,6 +204,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         guard let button = statusItem.button else { return }
+        // Size the popover before showing it, or it lands in the wrong place.
+        // AppKit positions a popover from its content size, and an
+        // NSHostingController has not produced one yet at `show` time: SwiftUI
+        // lays out afterwards, so the window gets the right size in a position
+        // worked out from the wrong one. Done on every show, not once in
+        // setupPopover, because the panel's content can change size between
+        // opens. Same fix as ActiveSpace 12540fe.
+        if let content = popover.contentViewController?.view {
+            content.layoutSubtreeIfNeeded()
+            popover.contentSize = content.fittingSize
+        }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
         installClickAwayMonitor()
