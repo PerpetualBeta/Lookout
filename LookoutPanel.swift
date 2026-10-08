@@ -41,7 +41,7 @@ struct LookoutPanel: View {
             default:
                 EmptyView()
             }
-            Button(action: { core.refreshNow() }) {
+            Button(action: { core.refreshNow(reason: "popover Refresh button") }) {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)
@@ -98,7 +98,7 @@ struct LookoutPanel: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
             HStack {
-                Button("Retry") { core.refreshNow() }
+                Button("Retry") { core.refreshNow(reason: "Retry button") }
                 // Only when GitHub refused the credential. This used to appear for
                 // every error — during the 2026-08-17 GitHub outage it proposed
                 // replacing a working token as the cure for a 503. A deliberate

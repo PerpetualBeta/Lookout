@@ -103,18 +103,25 @@ final class LookoutCore {
         nextPollAt = nil
     }
 
-    func refreshNow() {
+    /// Checks now, outside the schedule. `reason` goes to the log: a 1.3.0 test log held a check 56 s
+    /// after the previous one at a 5-minute interval, with nothing to say what had started it.
+    func refreshNow(reason: String) {
+        lkLog("check requested: \(reason)")
         stop()
         start()
     }
 
     func tokenWasUpdated() {
-        refreshNow()
+        refreshNow(reason: "new token")
     }
 
     /// The user changed the interval in Settings. Move the next check to one new interval after
     /// the last one began, instead of checking now: a stepper click must not send a request.
     /// A rate-limit wait still holds, and a time already past means the check is due now.
+    ///
+    /// Settings calls this only for a finished value: a stepper click, or a typed number once the
+    /// user presses Return or leaves the field. A value typed digit by digit must not arrive here,
+    /// because typing 166 passes through 1, and in 1.3.0 that "1" started a check on its own.
     func refreshIntervalChanged() {
         guard pollTask != nil, let started = lastPollStartedAt, nextPollAt != nil else { return }
         nextPollAt = scheduledPoll(after: started)
@@ -154,7 +161,7 @@ final class LookoutCore {
         guard let token = LookoutKeychain.loadToken() else { return }
         Task {
             try? await client.markAllNotificationsRead(token: token)
-            self.refreshNow()
+            self.refreshNow(reason: "mark all read")
         }
     }
 
@@ -239,7 +246,7 @@ final class LookoutCore {
         }
         wakeObserver = nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.isAsleep = false
-            self?.refreshNow()
+            self?.refreshNow(reason: "wake from sleep")
         }
     }
 }

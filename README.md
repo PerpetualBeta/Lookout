@@ -119,7 +119,7 @@ The three sources run concurrently on each poll. Items are deduped by URL, sorte
 
 Right-click the icon → **Settings…** for:
 
-- **Refresh**: how many minutes Lookout waits between automatic checks, from 1 to 360. A change moves the next check and does not start one. The Refresh button in the popover checks at once.
+- **Refresh**: how many minutes Lookout waits between automatic checks, from 1 to 360. The stepper applies each click. A typed number applies when you press Return or leave the field. A change moves the next check and does not start one. The Refresh button in the popover checks at once.
 - **Menu Bar Icon** — toggle the always-visible grey background pill
 - **General** — Launch at Login
 
@@ -133,7 +133,7 @@ Lookout can write a diagnostic log. It is off by default. To turn it on:
 defaults write cc.jorviksoftware.Lookout debugLogging -bool YES
 ```
 
-The log is at `~/Library/Logs/Lookout/lookout.log`. It records when each check starts, how many items it found, rate limits and failures, and when the next check is due. It never records the token. When the log reaches 4 MB, Lookout renames it to `lookout.log.1` and starts a new one, so the logs never use more than 8 MB. To turn it off:
+The log is at `~/Library/Logs/Lookout/lookout.log`. It records when each check starts and, for a check outside the schedule, what started it (the Refresh button, waking from sleep, a new token). It also records how many items each check found, rate limits and failures, and when the next check is due. It never records the token. When the log reaches 4 MB, Lookout renames it to `lookout.log.1` and starts a new one, so the logs never use more than 8 MB. To turn it off:
 
 ```
 defaults delete cc.jorviksoftware.Lookout debugLogging

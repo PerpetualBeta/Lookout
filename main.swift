@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         core.onStateChange = { [weak self] in
             self?.refreshIcon()
         }
+        lkLog("check requested: launch")
         core.start()
         refreshIcon()
 
@@ -248,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in self?.statusItem.menu = nil }
     }
 
-    @objc private func refreshNow() { core.refreshNow() }
+    @objc private func refreshNow() { core.refreshNow(reason: "menu Refresh") }
     @objc private func showSetupAction() { showSetup() }
     @objc private func openAboutAction() { openAbout() }
     @objc private func openSettingsAction() { openSettings() }
