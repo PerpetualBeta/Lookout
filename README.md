@@ -97,7 +97,9 @@ To replace the token later: right-click the menu-bar icon → **Re-enter GitHub 
 
 ## How it works
 
-Lookout polls GitHub at the cadence GitHub itself recommends — it reads the `X-Poll-Interval` response header (typically 60 s) and uses `If-Modified-Since` so untouched polls don't burn rate-limit budget.
+Lookout checks GitHub every minute by default. You can change this to any whole number of minutes from 1 to 360 in **Settings**. Lookout never checks more often than GitHub's `X-Poll-Interval` response header allows (typically 60 s), and it uses `If-Modified-Since` so that a check with no changes does not use rate-limit budget.
+
+If GitHub rate-limits a check, Lookout waits and tries again. It waits as long as GitHub asks, or for 2 minutes, and doubles the wait each time the limit repeats, up to 1 hour. A longer interval in Settings makes this less likely: each check sends several searches at the same time, and GitHub's secondary rate limit applies to bursts of requests.
 
 It pauses on system sleep and resumes — with an immediate refresh — on wake.
 
@@ -110,17 +112,32 @@ The three sources run concurrently on each poll. Items are deduped by URL, sorte
 | Left-click binoculars | Open the items popover |
 | Right-click binoculars | Open the standard Jorvik menu |
 | Click an item row | Open it on github.com |
-| Refresh button (popover header) | Force an immediate poll |
+| Refresh button (popover header) | Check GitHub now, whatever the interval in Settings |
 | Mark all read (popover footer) | Mark every GitHub notification as read |
 
 ## Settings
 
 Right-click the icon → **Settings…** for:
 
+- **Refresh**: how many minutes Lookout waits between automatic checks, from 1 to 360. A change moves the next check and does not start one. The Refresh button in the popover checks at once.
 - **Menu Bar Icon** — toggle the always-visible grey background pill
 - **General** — Launch at Login
 
 Auto-updates are handled by Sparkle. Use the **Check for Updates…** entry in the right-click menu to check on demand; Sparkle's prompt offers an "Automatically download and install updates in the future" checkbox the first time an update is available.
+
+## Troubleshooting
+
+Lookout can write a diagnostic log. It is off by default. To turn it on:
+
+```
+defaults write cc.jorviksoftware.Lookout debugLogging -bool YES
+```
+
+The log is at `~/Library/Logs/Lookout/lookout.log`. It records when each check starts, how many items it found, rate limits and failures, and when the next check is due. It never records the token. When the log reaches 4 MB, Lookout renames it to `lookout.log.1` and starts a new one, so the logs never use more than 8 MB. To turn it off:
+
+```
+defaults delete cc.jorviksoftware.Lookout debugLogging
+```
 
 ## Privacy
 
@@ -155,6 +172,8 @@ The target is defined in the shared `release.mk` from `jorvik-release/`; signing
 | `LookoutKeychain.swift` | PAT storage in macOS Keychain (service `cc.jorviksoftware.Lookout`, account `github-pat`) |
 | `LookoutPanel.swift` | SwiftUI popover content; grouped list, empty / error / unconfigured states |
 | `LookoutSetup.swift` | Token entry sheet; validates against `GET /user` before saving |
+| `LookoutSettings.swift` | The Refresh section of Settings: minutes between automatic checks, 1 to 360 |
+| `LookoutLog.swift` | Diagnostic log, off by default; rotates at 4 MB |
 | `JorvikKit/` | Shared About, Settings, menu-bar pill (canonical), update checker, window helper |
 
 ### Icon

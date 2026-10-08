@@ -276,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openSettings() {
         if popover.isShown { popover.performClose(nil) }
         JorvikSettingsView.showWindow(appName: "Lookout") { [weak self] in
+            LookoutRefreshSettings { self?.core.refreshIntervalChanged() }
             MenuBarPillSettings { self?.refreshIcon() }
         }
     }

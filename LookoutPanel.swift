@@ -204,14 +204,19 @@ struct LookoutPanel: View {
     /// then sat there until the next poll produced an identical one.
     ///
     /// Counting toward `nextPollAt` makes the sentence true, and the per-second tick makes it move. The
-    /// cadence is GitHub's, not ours — it comes back on every poll — so the loop publishes the deadline
-    /// rather than the panel assuming one.
+    /// cadence is the user's interval, lengthened by GitHub's poll interval and rate limits, so the loop
+    /// publishes the deadline rather than the panel assuming one.
     private func nextCheckLabel(at now: Date) -> String {
         guard let next = core.nextPollAt else { return "Checking…" }
         let remaining = Int(next.timeIntervalSince(now).rounded(.up))
         if remaining <= 0 { return "Checking…" }
         if remaining < 60 { return "Next check in \(remaining)s" }
-        return "Next check in \(remaining / 60) min"
+        let minutes = remaining / 60
+        if minutes < 60 { return "Next check in \(minutes) min" }
+        // The interval goes up to six hours, and "Next check in 359 min" has to be worked out.
+        return minutes % 60 == 0
+            ? "Next check in \(minutes / 60) h"
+            : "Next check in \(minutes / 60) h \(minutes % 60) min"
     }
 }
 

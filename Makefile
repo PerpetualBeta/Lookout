@@ -16,7 +16,9 @@ SWIFT_SOURCES    := main.swift \
                     LookoutGitHub.swift \
                     LookoutCore.swift \
                     LookoutPanel.swift \
-                    LookoutSetup.swift
+                    LookoutSetup.swift \
+                    LookoutSettings.swift \
+                    LookoutLog.swift
 
 PACKAGE_TYPE     := zip
 ALSO_SHIP_PKG    := true

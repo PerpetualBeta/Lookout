@@ -148,6 +148,15 @@ actor LookoutGitHubClient {
                 let wait = reset.map { max(0, $0 - Date().timeIntervalSince1970) }
                 throw LookoutGitHubError.rateLimited(retryAfter: wait)
             }
+            // A SECONDARY rate limit is also a 403, but the primary budget is not spent, so the check
+            // above misses it. Read as a rejected token, it stopped the poll loop and told the user
+            // to re-enter a token that was fine (2026-10-08, "You have exceeded a secondary rate
+            // limit" on /search/issues). GitHub marks it with Retry-After, or failing that only in
+            // the message, so both are checked.
+            if http.statusCode == 403, Self.isSecondaryRateLimit(http: http, data: data) {
+                let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)
+                throw LookoutGitHubError.rateLimited(retryAfter: retry)
+            }
             throw LookoutGitHubError.unauthorized(detail: Self.detail(http: http, data: data))
         case 429:
             let retry = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)
@@ -155,6 +164,13 @@ actor LookoutGitHubClient {
         default:
             throw LookoutGitHubError.http(http.statusCode, detail: Self.detail(http: http, data: data))
         }
+    }
+
+    static func isSecondaryRateLimit(http: HTTPURLResponse, data: Data) -> Bool {
+        if http.value(forHTTPHeaderField: "Retry-After") != nil { return true }
+        guard let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = body["message"] as? String else { return false }
+        return message.localizedCaseInsensitiveContains("rate limit")
     }
 
     private static func detail(http: HTTPURLResponse, data: Data) -> String {
