@@ -113,8 +113,9 @@ enum LookoutSetupWindow {
 
     static func show(onSaved: @escaping (String) -> Void) {
         if let existing {
-            existing.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            // Left open on another space, this would switch spaces to reach it.
+            // Same rule as About and Settings: it comes to this space instead.
+            JorvikWindowHelper.showOnActiveSpace(existing)
             return
         }
 
@@ -135,9 +136,7 @@ enum LookoutSetupWindow {
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: max(460, size.width), height: max(240, size.height)))
-        JorvikWindowHelper.centreOnActiveDisplay(window)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        JorvikWindowHelper.showOnActiveSpace(window)
         existing = window
     }
 
